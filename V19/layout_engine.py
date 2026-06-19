@@ -240,6 +240,54 @@ class LayoutEngine:
 
         return out
 
+    def asymmetric_rows(self, items: List, row_counts: List[int],
+                        span_left: float = None, top_y: float = None,
+                        span_width: float = None, gap: float = None) -> List[LayoutItem]:
+        """Lay out selected figures in stacked rows that each fill the same width.
+
+        A pattern such as ``2+1`` means two figures on the top row and one
+        figure on the bottom row. Each row is independently equal-height
+        justified to the same target width.
+        """
+        if not items:
+            return []
+        if sum(row_counts) != len(items):
+            raise ValueError("行模板数量与图片数量不一致")
+        if gap is None:
+            gap = self.spacing
+        if span_left is None:
+            span_left = self.margin
+        if top_y is None:
+            top_y = self.margin
+        if span_width is None:
+            span_width = self.available_width
+
+        out = []
+        cursor = 0
+        y = top_y
+        for count in row_counts:
+            row_items = items[cursor:cursor + count]
+            cursor += count
+            sizes = [(item.width, item.height) for item in row_items]
+            new_sizes = self.justified_row(sizes, span_width, gap)
+            x = span_left
+            row_height = 0.0
+            for item, (width, height) in zip(row_items, new_sizes):
+                out.append(LayoutItem(
+                    pdf_info=item.pdf_info,
+                    x=x,
+                    y=y,
+                    width=width,
+                    height=height,
+                    rotation=getattr(item, "rotation", 0.0),
+                    label=item.label,
+                ))
+                x += width + gap
+                row_height = max(row_height, height)
+            y += row_height + gap
+
+        return out
+
     # ==================================================================
     # 导入后的初始铺排（仅为整理，非最终排版）
     # ==================================================================

@@ -81,12 +81,6 @@ def main():
         backup_manager.start()
     window._backup_manager = backup_manager
 
-    try:
-        if backup_manager:
-            backup_manager.offer_recovery_if_any()
-    except Exception:
-        logger.exception("Autosave recovery prompt failed")
-
     if project_path:
         from PyQt5.QtCore import QTimer
         QTimer.singleShot(0, lambda: window.load_project_from_path(project_path))

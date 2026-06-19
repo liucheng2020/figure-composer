@@ -12,10 +12,11 @@ V19 的核心目标是减少论文组图中反复缩放、对齐、铺满画布�
 - 新增持久化设置窗口，可保存画布、边距、导出、标签、视图和自动备份默认值。
 - 提供智能网格排版，可按指定行列或非对称模板整理选中图像。
 - 支持等高填充宽度：通过在画布上拖一条横线指定总宽度，让选中图像等高铺满该宽度。
-- 支持 `左二右一`、`左一右二`、`左三右一`、`左三右二`、`三列各二` 等列模板，并支持 `2+1` 这类自定义模板。
+- 支持 `左二右一`、`左一右二`、`上二下一`、`上一下二`、`三列各二`、`上下各三` 等模板，并支持 `2+1` 这类自定义列模板。
 - 支持标签级联联动，保持 A、B、C 等图注编号连续。
 - 支持 PDF、PNG、TIFF 等导出方式，默认导出 DPI 为 1000。
-- 导出的 `_info.md` 同时记录文件名和最早导入时的原始路径。
+- 导出时如果图片超出画布，导出画布会自动扩大并平移导出副本，确保所有图片都在导出画布内。
+- 如果图片旁边存在 `<stem>.provenance.json`，V19 会自动读取并在导出组图时生成组合 provenance JSON。
 - 对点很多的矢量图，推荐导出 PDF 以保留矢量质量。
 - 支持 light、dark、cute 三种主题。
 - 内置自动备份与项目恢复机制，降低误操作或异常退出造成的损失。
@@ -101,14 +102,42 @@ V19 的重点功能是智能网格。
 
 等高填充会保留各图宽高比，不会强行拉伸图像内容。
 
-非对称模板使用标签顺序填入位置。例如 `左二右一` 中，A/B 放左侧上下，C 放右侧大图位置，左右总高度会自动对齐。
+非对称模板使用标签顺序填入位置。例如 `左二右一` 中，A/B 放左侧上下，C 放右侧大图位置，左右总高度会自动对齐；`上二下一` 中，A/B 放上排，C 放下排大图位置，两排都会铺满同一画布宽度。
 
 ## Export Notes
 
 - PDF 导出会尽量保留矢量质量，适合论文投稿和后续编辑。
 - PNG / TIFF 导出适合需要固定像素分辨率的场景。
 - 默认 DPI 为 1000，可以根据期刊要求调整。
+- 勾选自动裁剪时，导出画布会裁到图片包围盒；未勾选时保留原画布大小。
+- 如果图片被拖到画布边界外，导出时仍会自动扩大或平移导出副本，确保图片不被裁掉；画布上的原始排版位置不会被改动。
+- 普通导出和一键导出都会生成 `<export_base>_provenance.json`，把组图 panel 与原始 figure sidecar 关联起来。
 - 对单细胞 UMAP、火山图等点很多的矢量图，优先推荐 PDF 导出。
+
+## Figure Provenance
+
+V19 支持读取每张图旁边的 provenance sidecar：
+
+```text
+01_umap.pdf
+01_umap.provenance.json
+```
+
+导入图片时，如果 sidecar 存在，文件列表会显示 `provenance` 标记。保存 `.figbox` 时 provenance 会随项目保存；导出组图时会额外生成：
+
+```text
+<export_base>_provenance.json
+```
+
+用于后续大模型写结果报告时定位每个 panel 对应的代码、输入数据和分析上下文。
+
+旧项目可以先用内置工具生成 sidecar：
+
+```powershell
+Rscript tools/generate_figure_provenance.R "D:\path\to\analysis_project"
+```
+
+该工具会输出总清单 `figure_provenance/figure_provenance_manifest.json`，并在每张图旁边写入 `<stem>.provenance.json`。
 
 ## Build Windows EXE
 
@@ -141,6 +170,8 @@ V19/
 ├── auto_backup.py             # 自动备份
 ├── themes.py                  # 主题系统
 ├── build_exe_v19.py           # Windows EXE 打包脚本
+├── provenance_utils.py         # 图源信息 sidecar 与组图 provenance
+├── tools/                     # 可复用工具脚本
 ├── tests/                     # 测试
 ├── docs/                      # 开发文档
 └── V19更新说明.md              # V19 功能说明

@@ -21,7 +21,7 @@ V17 New Features (FigBox Container Edition):
 V16 Features (Enhanced Export Edition - Inherited):
 1. 📋 智能粘贴 + 画布间复制 - Ctrl+C/V支持跨画布复制粘贴，智能识别系统/内部剪贴板
 2. 🎯 1000DPI导出选项 - 新增超高分辨率导出支持
-3. 📝 导出图片信息记录 - 自动生成Markdown文件记录图片来源
+3. 📝 导出 provenance JSON - 自动记录组图 panel 与来源图信息
 4. ⚠️ 文件覆盖确认 - 导出前智能检测同名文件并确认
 5. 🔒 关闭软件确认 - 退出时弹出确认对话框防止误操作
 
@@ -75,7 +75,49 @@ import fitz
 import project_io as pio  # V17: figbox container I/O
 import logging
 from settings_manager import load_user_settings, save_settings
+from provenance_utils import load_figure_provenance, write_composition_provenance
 logger = logging.getLogger(__name__)
+
+
+def calculate_export_canvas(layouts, canvas_width, canvas_height, padding=2, auto_crop=True):
+    """Return shifted layout copies and an export canvas that contains all figures.
+
+    When auto_crop is True, blank canvas area is cropped to the figure bounds.
+    When auto_crop is False, the original canvas size is preserved unless
+    figures overflow beyond it.
+    """
+    if not layouts:
+        return [], canvas_width, canvas_height
+
+    min_left = min(layout.x for layout in layouts)
+    min_top = min(layout.y for layout in layouts)
+    max_right = max(layout.x + layout.width for layout in layouts)
+    max_bottom = max(layout.y + layout.height for layout in layouts)
+
+    if auto_crop:
+        shift_x = padding - min_left
+        shift_y = padding - min_top
+        export_width = (max_right - min_left) + 2 * padding
+        export_height = (max_bottom - min_top) + 2 * padding
+    else:
+        shift_x = max(0.0, padding - min_left)
+        shift_y = max(0.0, padding - min_top)
+        export_width = max(canvas_width + shift_x, max_right + shift_x + padding)
+        export_height = max(canvas_height + shift_y, max_bottom + shift_y + padding)
+
+    shifted_layouts = []
+    for layout in layouts:
+        shifted_layouts.append(LayoutItem(
+            pdf_info=layout.pdf_info,
+            x=layout.x + shift_x,
+            y=layout.y + shift_y,
+            width=layout.width,
+            height=layout.height,
+            rotation=layout.rotation,
+            label=layout.label,
+        ))
+
+    return shifted_layouts, math.ceil(export_width), math.ceil(export_height)
 
 
 class HistoryManager:
@@ -1160,18 +1202,17 @@ class ExportThread(QThread):
 
     def run(self):
         try:
-            if self.auto_crop and self.layouts:
-                crop_width, crop_height = self._calculate_crop_dimensions()
-            else:
-                crop_width, crop_height = self.canvas_width, self.canvas_height
+            export_layouts, crop_width, crop_height = calculate_export_canvas(
+                self.layouts, self.canvas_width, self.canvas_height,
+                auto_crop=self.auto_crop)
 
             if self.export_format == 'pdf':
                 from pdf_output import export_combined_pdf
-                export_combined_pdf(self.layouts, crop_width, crop_height,
+                export_combined_pdf(export_layouts, crop_width, crop_height,
                                   self.output_path, self.dpi, self.label_bold, self.label_offset)
             elif self.export_format in ['png', 'tif']:
                 from pdf_output import export_combined_image
-                export_combined_image(self.layouts, crop_width, crop_height,
+                export_combined_image(export_layouts, crop_width, crop_height,
                                     self.output_path, self.export_format, self.dpi, self.label_bold, self.label_offset)
 
             self.progress.emit(100)
@@ -1184,24 +1225,8 @@ class ExportThread(QThread):
 
     def _calculate_crop_dimensions(self):
         """Calculate the canvas size needed to fit all figures - V15 FIX."""
-        if not self.layouts:
-            return self.canvas_width, self.canvas_height
-
-        max_right = 0
-        max_bottom = 0
-
-        for layout in self.layouts:
-            right = layout.x + layout.width
-            bottom = layout.y + layout.height
-            max_right = max(max_right, right)
-            max_bottom = max(max_bottom, bottom)
-
-        margin = 2
-        # V15 FIX: Use max() to ensure all figures fit within the crop area
-        # Previously used min() which would crop figures extending beyond canvas
-        crop_width = max(1, max_right + margin)  # At least include all figures
-        crop_height = max(1, max_bottom + margin)
-
+        _, crop_width, crop_height = calculate_export_canvas(
+            self.layouts, self.canvas_width, self.canvas_height)
         return crop_width, crop_height
 
 
@@ -1747,7 +1772,7 @@ class FigureCombinerGUI(QMainWindow):
 
         self.auto_crop_check = QCheckBox("自动裁剪空白区域")
         self.auto_crop_check.setChecked(bool(self._setting("auto_crop", True)))
-        self.auto_crop_check.setToolTip("导出时自动去除底部和右侧的空白区域")
+        self.auto_crop_check.setToolTip("导出时自动调整画布，避免越界图片被裁掉")
         export_layout.addRow("", self.auto_crop_check)
 
         export_group.setLayout(export_layout)
@@ -1904,7 +1929,8 @@ class FigureCombinerGUI(QMainWindow):
         export_format = QComboBox()
         export_format.addItems(['PDF矢量', 'PNG图片', 'TIF图片'])
         self._set_combo_value(export_format, self._setting("export_format", "PDF矢量"))
-        auto_crop = QCheckBox("自动裁剪空白区域")
+        auto_crop = QCheckBox("导出时自动调整画布")
+        auto_crop.setToolTip("导出时自动扩大或平移导出副本，确保所有图片都在画布内")
         auto_crop.setChecked(bool(self._setting("auto_crop", True)))
         export_form.addRow("DPI:", dpi)
         export_form.addRow("格式:", export_format)
@@ -2093,6 +2119,9 @@ class FigureCombinerGUI(QMainWindow):
 
     def on_canvas_size_changed(self):
         """Handle canvas size change - V8 NEW: Update canvas when size changes."""
+        if self.current_canvas is not None:
+            self.current_canvas.canvas_width = self.get_canvas_width()
+            self.current_canvas.canvas_height = self.get_canvas_height()
         # Update canvas rectangle to match new size
         self.update_canvas_rectangle()
         # Update ruler if enabled
@@ -2663,6 +2692,7 @@ class FigureCombinerGUI(QMainWindow):
                     aspect_ratio=aspect_ratio,
                     sort_key=sort_key,
                     original_path=original_path,
+                    provenance=load_figure_provenance(original_path),
                 )
 
                 # Add to pdf_files list
@@ -2709,7 +2739,8 @@ class FigureCombinerGUI(QMainWindow):
 
                 # Add to file list
                 orientation = "竖图" if pdf_info.is_tall else "横图" if pdf_info.is_wide else "方图"
-                item_text = f"{pdf_info.filename}\n  {pdf_info.width:.0f}x{pdf_info.height:.0f} pt | {orientation}"
+                provenance_mark = " | provenance" if pdf_info.provenance else ""
+                item_text = f"{pdf_info.filename}\n  {pdf_info.width:.0f}x{pdf_info.height:.0f} pt | {orientation}{provenance_mark}"
                 list_item = QListWidgetItem(item_text)
                 self.file_list.addItem(list_item)
 
@@ -2991,6 +3022,10 @@ class FigureCombinerGUI(QMainWindow):
         try:
             # V15 FIX: Use clear() + extend() to maintain list reference
             new_pdfs = scan_pdf_folder(self.folder_path)
+            for pdf in new_pdfs:
+                if not pdf.original_path:
+                    pdf.original_path = pdf.filepath
+                pdf.provenance = load_figure_provenance(pdf.original_path)
             self.pdf_files.clear()
             self.pdf_files.extend(new_pdfs)
             # V15 FIX: Sync back to canvas
@@ -3000,7 +3035,8 @@ class FigureCombinerGUI(QMainWindow):
 
             for pdf in self.pdf_files:
                 orientation = "竖图" if pdf.is_tall else "横图" if pdf.is_wide else "方图"
-                item_text = f"{pdf.filename}\n  {pdf.width:.0f}x{pdf.height:.0f} pt | {orientation}"
+                provenance_mark = " | provenance" if pdf.provenance else ""
+                item_text = f"{pdf.filename}\n  {pdf.width:.0f}x{pdf.height:.0f} pt | {orientation}{provenance_mark}"
                 item = QListWidgetItem(item_text)
                 self.file_list.addItem(item)
 
@@ -3045,6 +3081,17 @@ class FigureCombinerGUI(QMainWindow):
             4: [("左三右一", "3+1"), ("左一右三", "1+3")],
             5: [("左三右二", "3+2"), ("左二右三", "2+3")],
             6: [("左四右二", "4+2"), ("左二右四", "2+4"), ("三列各二", "2+2+2")],
+        }
+        return presets.get(count, [])
+
+    @staticmethod
+    def _smart_grid_row_presets(count):
+        """Return V19 top-bottom asymmetric row presets matching selected figure count."""
+        presets = {
+            3: [("上二下一", "2+1"), ("上一下二", "1+2")],
+            4: [("上三下一", "3+1"), ("上一下三", "1+3")],
+            5: [("上三下二", "3+2"), ("上二下三", "2+3")],
+            6: [("上四下二", "4+2"), ("上二下四", "2+4"), ("上下各三", "3+3")],
         }
         return presets.get(count, [])
 
@@ -3104,12 +3151,27 @@ class FigureCombinerGUI(QMainWindow):
 
             column_presets = self._smart_grid_column_presets(count)
             if column_presets:
-                layout.addWidget(QLabel("非对称模板："))
+                layout.addWidget(QLabel("左右非对称模板："))
                 for title, pattern in column_presets:
                     radio = QRadioButton(f"{title}（{pattern}）")
                     radio_buttons.append({
                         "radio": radio,
                         "mode": "columns",
+                        "rows": None,
+                        "cols": None,
+                        "pattern": pattern,
+                    })
+                    button_group.addButton(radio)
+                    layout.addWidget(radio)
+
+            row_presets = self._smart_grid_row_presets(count)
+            if row_presets:
+                layout.addWidget(QLabel("上下非对称模板："))
+                for title, pattern in row_presets:
+                    radio = QRadioButton(f"{title}（{pattern}）")
+                    radio_buttons.append({
+                        "radio": radio,
+                        "mode": "rows",
                         "rows": None,
                         "cols": None,
                         "pattern": pattern,
@@ -3163,17 +3225,27 @@ class FigureCombinerGUI(QMainWindow):
                 except ValueError as e:
                     QMessageBox.warning(self, "模板错误", str(e))
                     return
+                selected_row_counts = None
+            elif selected_mode == "rows":
+                try:
+                    selected_row_counts = LayoutEngine.parse_column_pattern(selected_pattern, count)
+                except ValueError as e:
+                    QMessageBox.warning(self, "模板错误", str(e))
+                    return
+                selected_column_counts = None
             else:
                 selected_column_counts = None
+                selected_row_counts = None
         else:
             selected_mode = "grid"
             selected_pattern = None
             selected_column_counts = None
+            selected_row_counts = None
 
         do_fill = chk_fill.isChecked()
 
         if not do_fill:
-            if selected_column_counts:
+            if selected_column_counts or selected_row_counts:
                 QMessageBox.information(self, "提示", "非对称模板需要勾选“等高填充宽度”。")
                 return
             # V18 原版行为：仅按行列摆放，不缩放
@@ -3189,6 +3261,7 @@ class FigureCombinerGUI(QMainWindow):
             'mode': selected_mode,
             'pattern': selected_pattern,
             'column_counts': selected_column_counts,
+            'row_counts': selected_row_counts,
         }
         self.view.start_fill_line(self._on_fill_line_drawn)
         self.statusBar().showMessage(
@@ -3226,6 +3299,7 @@ class FigureCombinerGUI(QMainWindow):
         items = pending['items']
         rows, cols, count = pending['rows'], pending['cols'], pending['count']
         column_counts = pending.get('column_counts')
+        row_counts = pending.get('row_counts')
         pattern = pending.get('pattern')
         margin = self.get_margin()
         gap = self.get_spacing()
@@ -3261,6 +3335,23 @@ class FigureCombinerGUI(QMainWindow):
                 li.width = new_layout.width
                 li.height = new_layout.height
                 it.update_from_layout_item()
+        elif row_counts:
+            source_items = [it.layout_item for it in items]
+            new_layouts = engine.asymmetric_rows(
+                source_items,
+                row_counts,
+                span_left=span_left,
+                top_y=top_y,
+                span_width=span_width,
+                gap=gap,
+            )
+            for it, new_layout in zip(items, new_layouts):
+                li = it.layout_item
+                li.x = new_layout.x
+                li.y = new_layout.y
+                li.width = new_layout.width
+                li.height = new_layout.height
+                it.update_from_layout_item()
         else:
             cur_y = top_y
             for r in range(rows):
@@ -3280,7 +3371,12 @@ class FigureCombinerGUI(QMainWindow):
                 cur_y += row_h + gap
 
         self._sync_to_canvas()
-        layout_name = f"列模板 {pattern}" if column_counts else f"{rows}×{cols}"
+        if column_counts:
+            layout_name = f"列模板 {pattern}"
+        elif row_counts:
+            layout_name = f"行模板 {pattern}"
+        else:
+            layout_name = f"{rows}×{cols}"
         self.capture_history_state(f"智能网格等高填充 {layout_name}（{count} 张）")
         self.update_utilization(engine)
         self.statusBar().showMessage(
@@ -3720,10 +3816,10 @@ class FigureCombinerGUI(QMainWindow):
         if not output_path:
             return
 
-        # V16 NEW: Check if info file will be overwritten
+        # V19: Check if composition provenance JSON will be overwritten.
         base_path = os.path.splitext(output_path)[0]
-        info_file = f"{base_path}_info.md"
-        if not self._check_file_overwrite(info_file):
+        provenance_file = f"{base_path}_provenance.json"
+        if not self._check_file_overwrite(provenance_file):
             return
 
         # V10 NEW: Remember the export directory
@@ -3745,8 +3841,8 @@ class FigureCombinerGUI(QMainWindow):
 
         self.export_thread = ExportThread(
             current_states,
-            self.get_canvas_width(),
-            self.get_canvas_height(),
+            self.get_active_canvas_width(),
+            self.get_active_canvas_height(),
             output_path,
             ext,
             self.get_dpi(),
@@ -3767,13 +3863,14 @@ class FigureCombinerGUI(QMainWindow):
         progress.close()
         crop_msg = " (已自动裁剪空白区域)" if self.is_auto_crop() else ""
 
-        # V16 NEW: Export figure information if exporting from export_with_options
+        # V19: Export structured composition provenance JSON.
         info_msg = ""
         if current_states:
             base_path = os.path.splitext(path)[0]
-            md_path = self._export_figure_info(base_path, current_states)
-            if md_path:
-                info_msg = f"\n\n图片信息已保存: {md_path}"
+            provenance_path = write_composition_provenance(
+                base_path, os.path.basename(base_path), current_states,
+                project_root=getattr(self.current_canvas, "folder_path", None) or self.folder_path or None)
+            info_msg = f"\n\n组图 provenance 已保存: {provenance_path}"
 
         QMessageBox.information(self, "成功", f"文件已导出: {path}{crop_msg}{info_msg}")
         self.statusBar().showMessage(f"已导出: {path}")
@@ -3818,7 +3915,7 @@ class FigureCombinerGUI(QMainWindow):
             f"{base_path}.tif",
             f"{base_path}.png",
             f"{base_path}.figbox",
-            f"{base_path}_info.md"
+            f"{base_path}_provenance.json"
         ]
         if not self._check_file_overwrite(all_output_files):
             return
@@ -3839,30 +3936,29 @@ class FigureCombinerGUI(QMainWindow):
         try:
             from pdf_output import export_combined_pdf, export_combined_image
 
-            if self.is_auto_crop() and current_states:
-                crop_width, crop_height = self._calculate_crop_dimensions(current_states)
-            else:
-                crop_width, crop_height = self.get_canvas_width(), self.get_canvas_height()
+            export_states, crop_width, crop_height = calculate_export_canvas(
+                current_states, self.get_active_canvas_width(), self.get_active_canvas_height(),
+                auto_crop=self.is_auto_crop())
 
             progress.setLabelText("正在导出PDF...")
             progress.setValue(10)
             QApplication.processEvents()
             pdf_path = f"{base_path}.pdf"
-            export_combined_pdf(current_states, crop_width,
+            export_combined_pdf(export_states, crop_width,
                               crop_height, pdf_path, self.get_dpi(), self.is_label_bold(), self.get_label_offset())
 
             progress.setLabelText("正在导出TIF...")
             progress.setValue(40)
             QApplication.processEvents()
             tif_path = f"{base_path}.tif"
-            export_combined_image(current_states, crop_width,
+            export_combined_image(export_states, crop_width,
                                 crop_height, tif_path, 'tif', self.get_dpi(), self.is_label_bold(), self.get_label_offset())
 
             progress.setLabelText("正在导出PNG...")
             progress.setValue(70)
             QApplication.processEvents()
             png_path = f"{base_path}.png"
-            export_combined_image(current_states, crop_width,
+            export_combined_image(export_states, crop_width,
                                 crop_height, png_path, 'png', self.get_dpi(), self.is_label_bold(), self.get_label_offset())
 
             # V13 NEW: Also save project file with same name
@@ -3873,24 +3969,26 @@ class FigureCombinerGUI(QMainWindow):
             figproj_path = f"{base_path}.figbox"
             self._save_project_to_file(figproj_path, current_states)
 
-            # V16 NEW: Export figure information
-            progress.setLabelText("正在生成图片信息文件...")
+            # V19: Export structured composition provenance JSON.
+            progress.setLabelText("正在生成组图 provenance JSON...")
             progress.setValue(95)
             QApplication.processEvents()
-            md_path = self._export_figure_info(base_path, current_states)
+            provenance_path = write_composition_provenance(
+                base_path, os.path.basename(base_path), current_states,
+                project_root=getattr(self.current_canvas, "folder_path", None) or self.folder_path or None)
 
             progress.setValue(100)
             progress.close()
 
             crop_msg = "\n(已自动裁剪空白区域)" if self.is_auto_crop() else ""
-            info_msg = f"\n图片信息: {md_path}" if md_path else ""
+            provenance_msg = f"\n组图 provenance: {provenance_path}"
             QMessageBox.information(self, "成功",
                 f"已成功导出所有格式:{crop_msg}\n\n"
                 f"PDF: {pdf_path}\n"
                 f"TIF: {tif_path}\n"
                 f"PNG: {png_path}\n"
                 f"项目: {figproj_path}"
-                f"{info_msg}")
+                f"{provenance_msg}")
             self.statusBar().showMessage(f"已导出所有格式到: {base_path}")
 
         except Exception as e:
@@ -3900,61 +3998,6 @@ class FigureCombinerGUI(QMainWindow):
             error_detail = traceback.format_exc()
             QMessageBox.critical(self, "错误", f"导出失败: {e}\n\n详细错误:\n{error_detail}")
             self.statusBar().showMessage("导出失败")
-
-    def _export_figure_info(self, base_path, current_states):
-        """V16 NEW: Export figure information to Markdown file.
-
-        Records the mapping between exported figure labels and original PDF filenames.
-        Format: Figure [canvas_name][label] [original_filename]
-        Example: Figure 1A 01_富集分析.pdf
-
-        Args:
-            base_path: Base path for export (without extension)
-            current_states: List of layout items with current state
-
-        Returns:
-            md_path: Path to generated Markdown file, or None if failed
-        """
-        try:
-            # Get canvas name from filename (e.g., "Figure 1" from "/path/Figure 1")
-            canvas_name = os.path.basename(base_path)
-
-            # Generate Markdown content
-            md_lines = []
-            md_lines.append(f"# {canvas_name} - 图片信息")
-            md_lines.append("")
-            md_lines.append(f"**导出时间:** {self._get_current_datetime()}")
-            md_lines.append("")
-            md_lines.append("## 图片列表")
-            md_lines.append("")
-
-            for state in current_states:
-                pdf_info = state.pdf_info
-                original_filename = pdf_info.filename
-                original_path = getattr(pdf_info, "original_path", None)
-                path_label = "原始路径"
-                if not original_path:
-                    original_path = pdf_info.filepath
-                    path_label = "当前路径"
-                label = state.label
-                md_lines.append(f"- **{canvas_name}{label}**")
-                md_lines.append(f"  - 文件名: `{original_filename}`")
-                md_lines.append(f"  - {path_label}: `{original_path}`")
-
-            # Save as markdown file
-            md_path = f"{base_path}_info.md"
-            with open(md_path, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(md_lines))
-
-            print(f"✓ 图片信息已导出: {md_path}")
-            return md_path
-
-        except Exception as e:
-            print(f"✗ 导出图片信息失败: {e}")
-            import traceback
-            traceback.print_exc()
-            QMessageBox.warning(self, "警告", f"导出图片信息失败: {e}")
-            return None
 
     def _get_current_datetime(self):
         """V16 NEW: Get current date and time as formatted string."""
@@ -3994,24 +4037,8 @@ class FigureCombinerGUI(QMainWindow):
 
     def _calculate_crop_dimensions(self, layouts):
         """Calculate the canvas size needed to fit all figures - V15 FIX."""
-        if not layouts:
-            return self.get_canvas_width(), self.get_canvas_height()
-
-        max_right = 0
-        max_bottom = 0
-
-        for layout in layouts:
-            right = layout.x + layout.width
-            bottom = layout.y + layout.height
-            max_right = max(max_right, right)
-            max_bottom = max(max_bottom, bottom)
-
-        margin = 2
-        # V15 FIX: Use max() to ensure all figures fit within the crop area
-        # Previously used min() which would crop figures extending beyond canvas
-        crop_width = max(1, max_right + margin)  # At least include all figures
-        crop_height = max(1, max_bottom + margin)
-
+        _, crop_width, crop_height = calculate_export_canvas(
+            layouts, self.get_active_canvas_width(), self.get_active_canvas_height())
         return crop_width, crop_height
 
     def open_export_folder(self):
@@ -4096,6 +4123,7 @@ class FigureCombinerGUI(QMainWindow):
                 "expand_boundary": layout.pdf_info.expand_boundary,
                 "expanded_filepath": layout.pdf_info.expanded_filepath,
                 "cumulative_margin": layout.pdf_info.cumulative_margin,
+                "provenance": getattr(layout.pdf_info, "provenance", None),
             })
         return project_data
 
@@ -4340,6 +4368,7 @@ class FigureCombinerGUI(QMainWindow):
                 aspect_ratio=aspect_ratio,
                 sort_key=sort_key,
                 original_path=layout_data.get("original_path") or pdf_path,
+                provenance=layout_data.get("provenance"),
             )
             if not pdf_exists:
                 pdf_info.is_missing = True
@@ -4381,7 +4410,8 @@ class FigureCombinerGUI(QMainWindow):
         self.file_list.clear()
         for pdf in pdf_files_loaded:
             orientation = "竖图" if pdf.is_tall else "横图" if pdf.is_wide else "方图"
-            item_text = f"{pdf.filename}\n  {pdf.width:.0f}x{pdf.height:.0f} pt | {orientation}"
+            provenance_mark = " | provenance" if pdf.provenance else ""
+            item_text = f"{pdf.filename}\n  {pdf.width:.0f}x{pdf.height:.0f} pt | {orientation}{provenance_mark}"
             list_item = QListWidgetItem(item_text)
             self.file_list.addItem(list_item)
 

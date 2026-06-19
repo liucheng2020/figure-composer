@@ -20,6 +20,7 @@ class PDFInfo:
     expanded_filepath: str = None  # V6: 扩展边界后的临时文件路径
     cumulative_margin: int = 0  # V6: 累积的扩展边距（用于基于原始PDF多次扩展）
     original_path: str = None  # V19: 用户最早导入的真实路径，用于导出信息记录
+    provenance: dict = None  # V19: 同名 .provenance.json 读取到的图源信息
 
     @property
     def is_tall(self) -> bool:

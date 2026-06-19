@@ -120,6 +120,8 @@ def build_exe():
         "--hidden-import=project_io",
         "--hidden-import=auto_backup",
         "--hidden-import=log_setup",
+        "--hidden-import=settings_manager",
+        "--hidden-import=provenance_utils",
         # ---- excludes for size ----
         "--exclude-module=matplotlib",
         "--exclude-module=tkinter",
