@@ -1,0 +1,31 @@
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+
+# Packaging and build outputs
+build/
+dist/
+*.spec
+*.toc
+
+# Local trash, backups, and logs
+.Trash/
+*.log
+*.bak
+*.tmp
+
+# Test and coverage cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

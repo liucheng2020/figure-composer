@@ -1,5 +1,56 @@
+# Keep this repository focused on maintained versions.
+/V15/
+/V16/
+/V17/
+/.claude/
+
+# Legacy root-level experiments from pre-Git versions.
+/QUICK_TEST.md
+/VERSION_GUIDE.md
+/analyze_pdfs.py
+/detect_clipping.py
+/extract_text_coords.py
+/gui_editor_v6.py
+/main_v5.py
+/main_v6.py
+/pdf_boundary_fix_final.py
+/pdf_boundary_fix_v2.py
+/pdf_boundary_fix_v3.py
+/remove_clipping_box.py
+/remove_clipping_final.py
+/run_v6.py
+/test_boundary_fix.py
+/test_cumulative_expansion.py
+/test_v6_boundary_fix.py
+/verify_expanded_pdfs.py
+/verify_fix.py
+
+# Root-level files that now live under versioned folders.
+/README.md
+/V18更新说明.md
+/auto_backup.py
+/build_exe_v18.py
+/canvas_widget.py
+/dark_theme.py
+/docs/
+/gui_editor.py
+/layout_engine.py
+/log_setup.py
+/pdf_boundary_fix.py
+/pdf_output.py
+/pdf_utils.py
+/project_io.py
+/register_figbox.bat
+/requirements.txt
+/run_v18.py
+/tests/
+/themes.py
+/unregister_figbox.bat
+/启动V18.bat
+
 # Python cache and virtual environments
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
 .Python
@@ -10,17 +61,21 @@ env/
 # Packaging and build outputs
 build/
 dist/
+**/build/
+**/dist/
 *.spec
 *.toc
 
 # Local trash, backups, and logs
 .Trash/
+**/.Trash/
 *.log
 *.bak
 *.tmp
 
 # Test and coverage cache
 .pytest_cache/
+**/.pytest_cache/
 .coverage
 htmlcov/
 
