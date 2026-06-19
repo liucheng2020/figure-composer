@@ -61,22 +61,27 @@ def check_dependencies():
 
 
 def cleanup_old_builds():
-    print("清理旧的构建文件...")
+    print("移动旧的构建文件到 .Trash...")
     print("-" * 70)
+    trash_dir = ".Trash"
+    os.makedirs(trash_dir, exist_ok=True)
+    stamp = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
     for d in ("build", "dist", "__pycache__"):
         if os.path.exists(d):
             try:
-                shutil.rmtree(d)
-                print(f"  removed dir  {d}")
+                target = os.path.join(trash_dir, f"{d}_{stamp}")
+                shutil.move(d, target)
+                print(f"  moved dir  {d} -> {target}")
             except OSError as e:
-                print(f"  warning: cannot remove {d}: {e}")
+                print(f"  warning: cannot move {d}: {e}")
     for f in (f"{EXE_NAME}.spec",):
         if os.path.exists(f):
             try:
-                os.remove(f)
-                print(f"  removed file {f}")
+                target = os.path.join(trash_dir, f"{os.path.basename(f)}_{stamp}")
+                shutil.move(f, target)
+                print(f"  moved file {f} -> {target}")
             except OSError as e:
-                print(f"  warning: cannot remove {f}: {e}")
+                print(f"  warning: cannot move {f}: {e}")
     print()
 
 

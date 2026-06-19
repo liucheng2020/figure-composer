@@ -1,4 +1,4 @@
-"""PyQt5 GUI for interactive figure layout editor - Version 18.
+"""PyQt5 GUI for interactive figure layout editor - Version 19.
 
 V19 New Features (Proportional Fill Edition):
 1. 删除 7 个低效自动排版（规则网格/紧凑/黄金分割/瀑布流/智能分组/自适应权重/AI智能布局）
