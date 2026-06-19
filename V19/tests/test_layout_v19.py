@@ -88,5 +88,19 @@ class SettingsManagerV19Tests(unittest.TestCase):
         self.assertEqual(loaded["dpi"], DEFAULT_SETTINGS["dpi"])
 
 
+class PDFInfoV19Tests(unittest.TestCase):
+    def test_pdf_info_keeps_original_source_path(self):
+        info = PDFInfo(
+            filepath="D:/temp/converted.pdf",
+            filename="source.png",
+            width=100,
+            height=50,
+            aspect_ratio=2.0,
+            sort_key=(1, "source"),
+            original_path="D:/raw/source.png",
+        )
+        self.assertEqual(info.original_path, "D:/raw/source.png")
+
+
 if __name__ == "__main__":
     unittest.main()

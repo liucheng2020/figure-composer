@@ -35,7 +35,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 FIGBOX_FORMAT_VERSION = "1.0"
-GENERATOR = "FigBox V17"
+GENERATOR = "FigBox V19"
 MANIFEST_NAME = "manifest.json"
 PROJECT_NAME = "project.json"
 ASSETS_DIR = "assets"
@@ -127,14 +127,15 @@ def pack_figbox(save_path, project_data, asset_filepaths=None):
         src = old_layout.get("pdf_path")
         if src:
             abs_src = os.path.abspath(src)
+            original_src = old_layout.get("original_path") or abs_src
             arcname = path_to_arcname.get(abs_src)
             if arcname:
                 new_layout["pdf_path"] = arcname
-                new_layout["original_path"] = abs_src
+                new_layout["original_path"] = original_src
                 new_layout.pop("is_missing", None)
             else:
                 new_layout["pdf_path"] = abs_src
-                new_layout["original_path"] = abs_src
+                new_layout["original_path"] = original_src
                 new_layout["is_missing"] = True
         exp = old_layout.get("expanded_filepath")
         if exp:

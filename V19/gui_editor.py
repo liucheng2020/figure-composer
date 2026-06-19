@@ -74,6 +74,7 @@ import fitz
 
 import project_io as pio  # V17: figbox container I/O
 import logging
+from settings_manager import load_user_settings, save_settings
 logger = logging.getLogger(__name__)
 
 
@@ -1240,12 +1241,32 @@ class FigureCombinerGUI(QMainWindow):
         self.current_theme = "light"  # Default theme - changed to light in V12.1
         self.current_theme_class = LightTheme
 
+        # V19: User-level defaults persisted under %USERPROFILE%/.figbox.
+        self.user_settings = load_user_settings()
+
         # V17 NEW: figbox container temp dirs to clean up at exit
         # Each entry is the temp_dir returned by project_io.unpack_figbox /
         # import_legacy_figproj for an opened project.
         self.active_temp_dirs = []
 
         self.init_ui()
+
+    def _setting(self, key, default=None):
+        """Return a persisted V19 user setting with a local fallback."""
+        return self.user_settings.get(key, default)
+
+    def _set_combo_value(self, combo, value, suffix=""):
+        """Set a combo text only when the target value exists."""
+        text = f"{value}{suffix}"
+        values = [combo.itemText(i) for i in range(combo.count())]
+        if text in values:
+            combo.setCurrentText(text)
+
+    def _settings_canvas_width_text(self):
+        return f"{int(self._setting('canvas_width', 297))}mm"
+
+    def _settings_canvas_height_text(self):
+        return f"{int(self._setting('canvas_height', 210))}mm"
 
     def _sync_to_canvas(self):
         """V15 FIX: Sync proxy variables back to current_canvas.
@@ -1262,7 +1283,7 @@ class FigureCombinerGUI(QMainWindow):
 
     def init_ui(self):
         """V16: Initialize user interface with new features."""
-        self.setWindowTitle("学术组图工具 V16.0 Professional - 增强导出版")
+        self.setWindowTitle("学术组图工具 V19.0 FigBox")
         self.setGeometry(50, 50, 1600, 1000)
 
         app_font = QFont("Microsoft YaHei", 9)
@@ -1288,7 +1309,7 @@ class FigureCombinerGUI(QMainWindow):
         self.create_parameters_dock()
 
         # Status bar
-        self.statusBar().showMessage("就绪 | V16: 增强导出版 | 拖拽PDF到画布 | Ctrl+C复制 Ctrl+V粘贴 | Ctrl+S保存项目")
+        self.statusBar().showMessage("就绪 | V19: 智能网格与持久化设置 | 拖拽PDF到画布 | Ctrl+C复制 Ctrl+V粘贴 | Ctrl+S保存项目")
 
         # Setup shortcuts
         self.setup_shortcuts()
@@ -1349,6 +1370,12 @@ class FigureCombinerGUI(QMainWindow):
         act_cute.setStatusTip("切换到粉色可爱主题")
         act_cute.triggered.connect(lambda: self.switch_theme("cute"))
         theme_menu.addAction(act_cute)
+
+        settings_menu = menubar.addMenu("设置(&S)")
+        act_settings = QAction("设置...", self)
+        act_settings.setStatusTip("设置 V19 默认画布、边距、导出、标签和自动备份")
+        act_settings.triggered.connect(self.open_settings_dialog)
+        settings_menu.addAction(act_settings)
 
     def switch_theme(self, theme_key):
         """V12 NEW: Switch to a different theme.
@@ -1571,10 +1598,18 @@ class FigureCombinerGUI(QMainWindow):
 
         toolbar3.addSeparator()
 
+        act_settings = QAction("设置", self)
+        act_settings.setToolTip("打开 V19 默认设置")
+        act_settings.triggered.connect(self.open_settings_dialog)
+        toolbar3.addAction(act_settings)
+
+        toolbar3.addSeparator()
+
         # V8 NEW: Grid snap toggle
         self.act_snap_grid = QAction("🔲 网格吸附", self)
         self.act_snap_grid.setCheckable(True)
-        self.act_snap_grid.setChecked(False)
+        self.act_snap_grid.setChecked(bool(self._setting("snap_enabled", False)))
+        self.snap_enabled = bool(self._setting("snap_enabled", False))
         self.act_snap_grid.setToolTip("开启后移动图片会自动吸附到网格点")
         self.act_snap_grid.triggered.connect(self.toggle_grid_snap)
         toolbar3.addAction(self.act_snap_grid)
@@ -1582,7 +1617,8 @@ class FigureCombinerGUI(QMainWindow):
         # V8 NEW: Show guides toggle
         self.act_show_guides = QAction("📐 对齐辅助线", self)
         self.act_show_guides.setCheckable(True)
-        self.act_show_guides.setChecked(False)
+        self.act_show_guides.setChecked(bool(self._setting("show_guides", False)))
+        self.show_guides = bool(self._setting("show_guides", False))
         self.act_show_guides.setToolTip("移动图片时显示对齐辅助线")
         self.act_show_guides.triggered.connect(self.toggle_show_guides)
         toolbar3.addAction(self.act_show_guides)
@@ -1590,7 +1626,8 @@ class FigureCombinerGUI(QMainWindow):
         # V8 NEW: Show ruler toggle
         self.act_show_ruler = QAction("📏 标尺", self)
         self.act_show_ruler.setCheckable(True)
-        self.act_show_ruler.setChecked(False)
+        self.act_show_ruler.setChecked(bool(self._setting("show_ruler", False)))
+        self.show_ruler = bool(self._setting("show_ruler", False))
         self.act_show_ruler.setToolTip("显示画布标尺和参考线")
         self.act_show_ruler.triggered.connect(self.toggle_show_ruler)
         toolbar3.addAction(self.act_show_ruler)
@@ -1631,13 +1668,14 @@ class FigureCombinerGUI(QMainWindow):
 
         self.canvas_preset = QComboBox()
         self.canvas_preset.addItems(list(CANVAS_PRESETS.keys()))
+        self._set_combo_value(self.canvas_preset, self._setting("canvas_preset", "A4横版"))
         self.canvas_preset.currentTextChanged.connect(self.on_canvas_preset_changed)
         canvas_layout.addRow("预设:", self.canvas_preset)
 
         self.canvas_width_combo = QComboBox()
         width_options = ['50mm', '100mm', '150mm', '180mm', '190mm', '210mm', '297mm', '400mm', '500mm']
         self.canvas_width_combo.addItems(width_options)
-        self.canvas_width_combo.setCurrentText('297mm')
+        self._set_combo_value(self.canvas_width_combo, int(self._setting("canvas_width", 297)), "mm")
         self.canvas_width_combo.setEditable(False)
         self.canvas_width_combo.currentTextChanged.connect(self.on_canvas_size_changed)
         canvas_layout.addRow("宽度:", self.canvas_width_combo)
@@ -1645,7 +1683,7 @@ class FigureCombinerGUI(QMainWindow):
         self.canvas_height_combo = QComboBox()
         height_options = ['50mm', '100mm', '150mm', '180mm', '190mm', '210mm', '297mm', '400mm', '500mm']
         self.canvas_height_combo.addItems(height_options)
-        self.canvas_height_combo.setCurrentText('210mm')
+        self._set_combo_value(self.canvas_height_combo, int(self._setting("canvas_height", 210)), "mm")
         self.canvas_height_combo.setEditable(False)
         self.canvas_height_combo.currentTextChanged.connect(self.on_canvas_size_changed)
         canvas_layout.addRow("高度:", self.canvas_height_combo)
@@ -1660,14 +1698,14 @@ class FigureCombinerGUI(QMainWindow):
         self.margin_combo = QComboBox()
         margin_options = ['0mm', '2mm', '5mm', '8mm', '10mm', '15mm', '20mm', '25mm', '30mm']
         self.margin_combo.addItems(margin_options)
-        self.margin_combo.setCurrentText('10mm')
+        self._set_combo_value(self.margin_combo, int(self._setting("margin", 5)), "mm")
         self.margin_combo.setEditable(False)
         spacing_layout.addRow("边距:", self.margin_combo)
 
         self.spacing_combo = QComboBox()
         spacing_options = ['0mm', '2mm', '3mm', '5mm', '8mm', '10mm', '12mm', '15mm', '20mm']
         self.spacing_combo.addItems(spacing_options)
-        self.spacing_combo.setCurrentText('5mm')
+        self._set_combo_value(self.spacing_combo, int(self._setting("spacing", 5)), "mm")
         self.spacing_combo.setEditable(False)
         spacing_layout.addRow("间距:", self.spacing_combo)
 
@@ -1681,7 +1719,7 @@ class FigureCombinerGUI(QMainWindow):
         self.grid_size_combo = QComboBox()
         grid_options = ['1mm', '2mm', '5mm', '10mm', '20mm']
         self.grid_size_combo.addItems(grid_options)
-        self.grid_size_combo.setCurrentText('5mm')
+        self._set_combo_value(self.grid_size_combo, int(self._setting("grid_size", 5)), "mm")
         self.grid_size_combo.setEditable(False)
         self.grid_size_combo.currentTextChanged.connect(self.on_grid_size_changed)
         grid_layout.addRow("网格大小:", self.grid_size_combo)
@@ -1698,16 +1736,17 @@ class FigureCombinerGUI(QMainWindow):
         dpi_options = ['72', '150', '300', '400', '500', '600', '1000', '1200']
         self.dpi_combo.addItems(dpi_options)
         # V19: 导出默认 1000 DPI（出版级）；屏幕预览仍用 72 DPI 渲染，保证流畅
-        self.dpi_combo.setCurrentText('1000')
+        self._set_combo_value(self.dpi_combo, int(self._setting("dpi", 1000)))
         self.dpi_combo.setEditable(False)
         export_layout.addRow("DPI:", self.dpi_combo)
 
         self.export_format = QComboBox()
         self.export_format.addItems(['PDF矢量', 'PNG图片', 'TIF图片'])
+        self._set_combo_value(self.export_format, self._setting("export_format", "PDF矢量"))
         export_layout.addRow("格式:", self.export_format)
 
         self.auto_crop_check = QCheckBox("自动裁剪空白区域")
-        self.auto_crop_check.setChecked(True)
+        self.auto_crop_check.setChecked(bool(self._setting("auto_crop", True)))
         self.auto_crop_check.setToolTip("导出时自动去除底部和右侧的空白区域")
         export_layout.addRow("", self.auto_crop_check)
 
@@ -1721,25 +1760,25 @@ class FigureCombinerGUI(QMainWindow):
         self.label_fontsize_combo = QComboBox()
         fontsize_options = ['8', '10', '12', '14', '16', '18', '20']
         self.label_fontsize_combo.addItems(fontsize_options)
-        self.label_fontsize_combo.setCurrentText('12')
+        self._set_combo_value(self.label_fontsize_combo, int(self._setting("label_fontsize", 12)))
         self.label_fontsize_combo.setEditable(False)
         self.label_fontsize_combo.currentTextChanged.connect(self.on_label_style_changed)
         label_layout.addRow("字号:", self.label_fontsize_combo)
 
         self.label_visible_check = QCheckBox("显示标签")
-        self.label_visible_check.setChecked(True)
+        self.label_visible_check.setChecked(bool(self._setting("label_visible", True)))
         self.label_visible_check.stateChanged.connect(self.on_label_style_changed)
         label_layout.addRow("", self.label_visible_check)
 
         self.label_bold_check = QCheckBox("加粗")
-        self.label_bold_check.setChecked(True)
+        self.label_bold_check.setChecked(bool(self._setting("label_bold", True)))
         self.label_bold_check.stateChanged.connect(self.on_label_style_changed)
         label_layout.addRow("", self.label_bold_check)
 
         self.label_color_combo = QComboBox()
         color_options = ['黑色', '白色', '红色', '蓝色', '绿色']
         self.label_color_combo.addItems(color_options)
-        self.label_color_combo.setCurrentText('黑色')
+        self._set_combo_value(self.label_color_combo, self._setting("label_color", "黑色"))
         self.label_color_combo.setEditable(False)
         self.label_color_combo.currentTextChanged.connect(self.on_label_style_changed)
         label_layout.addRow("颜色:", self.label_color_combo)
@@ -1748,7 +1787,7 @@ class FigureCombinerGUI(QMainWindow):
         self.label_offset_combo = QComboBox()
         offset_options = ['0.25mm', '0.5mm', '0.7mm', '1mm', '2mm']
         self.label_offset_combo.addItems(offset_options)
-        self.label_offset_combo.setCurrentText('0.25mm')  # Default
+        self._set_combo_value(self.label_offset_combo, self._setting("label_offset", 0.25), "mm")
         self.label_offset_combo.setEditable(False)
         self.label_offset_combo.currentTextChanged.connect(self.on_label_offset_changed)
         label_layout.addRow("距离:", self.label_offset_combo)
@@ -1761,6 +1800,197 @@ class FigureCombinerGUI(QMainWindow):
         dock.setWidget(widget)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
 
+    def _set_combo_without_signal(self, combo, value, suffix=""):
+        """Set a combo value without triggering canvas resize side effects."""
+        old_block = combo.blockSignals(True)
+        self._set_combo_value(combo, value, suffix)
+        combo.blockSignals(old_block)
+
+    def _apply_saved_settings_to_controls(self):
+        """Apply persisted defaults to controls without rearranging current figures."""
+        self._set_combo_without_signal(self.canvas_preset, self._setting("canvas_preset", "A4横版"))
+        self._set_combo_without_signal(self.canvas_width_combo, int(self._setting("canvas_width", 297)), "mm")
+        self._set_combo_without_signal(self.canvas_height_combo, int(self._setting("canvas_height", 210)), "mm")
+        self._set_combo_value(self.margin_combo, int(self._setting("margin", 5)), "mm")
+        self._set_combo_value(self.spacing_combo, int(self._setting("spacing", 5)), "mm")
+        self._set_combo_value(self.grid_size_combo, int(self._setting("grid_size", 5)), "mm")
+        self.grid_size = float(self._setting("grid_size", 5))
+        self._set_combo_value(self.dpi_combo, int(self._setting("dpi", 1000)))
+        self._set_combo_value(self.export_format, self._setting("export_format", "PDF矢量"))
+        self.auto_crop_check.setChecked(bool(self._setting("auto_crop", True)))
+        self._set_combo_value(self.label_fontsize_combo, int(self._setting("label_fontsize", 12)))
+        self.label_visible_check.setChecked(bool(self._setting("label_visible", True)))
+        self.label_bold_check.setChecked(bool(self._setting("label_bold", True)))
+        self._set_combo_value(self.label_color_combo, self._setting("label_color", "黑色"))
+        self._set_combo_value(self.label_offset_combo, self._setting("label_offset", 0.25), "mm")
+        self.snap_enabled = bool(self._setting("snap_enabled", False))
+        self.show_guides = bool(self._setting("show_guides", False))
+        self.show_ruler = bool(self._setting("show_ruler", False))
+        self.act_snap_grid.setChecked(self.snap_enabled)
+        self.act_show_guides.setChecked(self.show_guides)
+        self.act_show_ruler.setChecked(self.show_ruler)
+        self.on_label_style_changed()
+
+    def _restart_auto_backup_from_settings(self):
+        """Apply autosave settings to the running session when possible."""
+        manager = getattr(self, "_backup_manager", None)
+        if manager:
+            manager.stop()
+            self._backup_manager = None
+        if not self._setting("autosave_enabled", True):
+            return
+        try:
+            from auto_backup import AutoBackupManager
+            interval = int(self._setting("autosave_interval_minutes", 5))
+            manager = AutoBackupManager(self, interval_minutes=interval)
+            manager.start()
+            self._backup_manager = manager
+        except Exception:
+            logger.exception("Failed to restart autosave after settings change")
+
+    def open_settings_dialog(self):
+        """Open V19 persistent default settings dialog."""
+        from PyQt5.QtWidgets import QDialog, QDialogButtonBox
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("V19 设置")
+        dialog_layout = QVBoxLayout(dialog)
+
+        canvas_group = QGroupBox("画布默认值")
+        canvas_layout = QFormLayout()
+        canvas_preset = QComboBox()
+        canvas_preset.addItems(list(CANVAS_PRESETS.keys()))
+        self._set_combo_value(canvas_preset, self._setting("canvas_preset", "A4横版"))
+        canvas_width = QComboBox()
+        canvas_width.addItems(['50mm', '100mm', '150mm', '180mm', '190mm', '210mm', '297mm', '400mm', '500mm'])
+        self._set_combo_value(canvas_width, int(self._setting("canvas_width", 297)), "mm")
+        canvas_height = QComboBox()
+        canvas_height.addItems(['50mm', '100mm', '150mm', '180mm', '190mm', '210mm', '297mm', '400mm', '500mm'])
+        self._set_combo_value(canvas_height, int(self._setting("canvas_height", 210)), "mm")
+        canvas_preset.currentTextChanged.connect(
+            lambda name: (
+                canvas_width.setCurrentText(f"{int(CANVAS_PRESETS[name][0])}mm"),
+                canvas_height.setCurrentText(f"{int(CANVAS_PRESETS[name][1])}mm")
+            ) if name in CANVAS_PRESETS and CANVAS_PRESETS[name] else None
+        )
+        canvas_layout.addRow("预设:", canvas_preset)
+        canvas_layout.addRow("宽度:", canvas_width)
+        canvas_layout.addRow("高度:", canvas_height)
+        canvas_group.setLayout(canvas_layout)
+        dialog_layout.addWidget(canvas_group)
+
+        layout_group = QGroupBox("布局默认值")
+        layout_form = QFormLayout()
+        margin = QComboBox()
+        margin.addItems(['0mm', '2mm', '5mm', '8mm', '10mm', '15mm', '20mm', '25mm', '30mm'])
+        self._set_combo_value(margin, int(self._setting("margin", 5)), "mm")
+        spacing = QComboBox()
+        spacing.addItems(['0mm', '2mm', '3mm', '5mm', '8mm', '10mm', '12mm', '15mm', '20mm'])
+        self._set_combo_value(spacing, int(self._setting("spacing", 5)), "mm")
+        grid_size = QComboBox()
+        grid_size.addItems(['1mm', '2mm', '5mm', '10mm', '20mm'])
+        self._set_combo_value(grid_size, int(self._setting("grid_size", 5)), "mm")
+        layout_form.addRow("边距:", margin)
+        layout_form.addRow("图间距:", spacing)
+        layout_form.addRow("网格:", grid_size)
+        layout_group.setLayout(layout_form)
+        dialog_layout.addWidget(layout_group)
+
+        export_group = QGroupBox("导出默认值")
+        export_form = QFormLayout()
+        dpi = QComboBox()
+        dpi.addItems(['72', '150', '300', '400', '500', '600', '1000', '1200'])
+        self._set_combo_value(dpi, int(self._setting("dpi", 1000)))
+        export_format = QComboBox()
+        export_format.addItems(['PDF矢量', 'PNG图片', 'TIF图片'])
+        self._set_combo_value(export_format, self._setting("export_format", "PDF矢量"))
+        auto_crop = QCheckBox("自动裁剪空白区域")
+        auto_crop.setChecked(bool(self._setting("auto_crop", True)))
+        export_form.addRow("DPI:", dpi)
+        export_form.addRow("格式:", export_format)
+        export_form.addRow("", auto_crop)
+        export_group.setLayout(export_form)
+        dialog_layout.addWidget(export_group)
+
+        label_group = QGroupBox("标签默认值")
+        label_form = QFormLayout()
+        label_fontsize = QComboBox()
+        label_fontsize.addItems(['8', '10', '12', '14', '16', '18', '20'])
+        self._set_combo_value(label_fontsize, int(self._setting("label_fontsize", 12)))
+        label_visible = QCheckBox("显示标签")
+        label_visible.setChecked(bool(self._setting("label_visible", True)))
+        label_bold = QCheckBox("加粗")
+        label_bold.setChecked(bool(self._setting("label_bold", True)))
+        label_color = QComboBox()
+        label_color.addItems(['黑色', '白色', '红色', '蓝色', '绿色'])
+        self._set_combo_value(label_color, self._setting("label_color", "黑色"))
+        label_offset = QComboBox()
+        label_offset.addItems(['0.25mm', '0.5mm', '0.7mm', '1mm', '2mm'])
+        self._set_combo_value(label_offset, self._setting("label_offset", 0.25), "mm")
+        label_form.addRow("字号:", label_fontsize)
+        label_form.addRow("", label_visible)
+        label_form.addRow("", label_bold)
+        label_form.addRow("颜色:", label_color)
+        label_form.addRow("距离:", label_offset)
+        label_group.setLayout(label_form)
+        dialog_layout.addWidget(label_group)
+
+        view_group = QGroupBox("视图与自动备份")
+        view_form = QFormLayout()
+        snap_enabled = QCheckBox("默认开启网格吸附")
+        snap_enabled.setChecked(bool(self._setting("snap_enabled", False)))
+        show_guides = QCheckBox("默认显示对齐辅助线")
+        show_guides.setChecked(bool(self._setting("show_guides", False)))
+        show_ruler = QCheckBox("默认显示标尺")
+        show_ruler.setChecked(bool(self._setting("show_ruler", False)))
+        autosave_enabled = QCheckBox("开启自动备份")
+        autosave_enabled.setChecked(bool(self._setting("autosave_enabled", True)))
+        autosave_interval = QSpinBox()
+        autosave_interval.setRange(1, 60)
+        autosave_interval.setValue(int(self._setting("autosave_interval_minutes", 5)))
+        view_form.addRow("", snap_enabled)
+        view_form.addRow("", show_guides)
+        view_form.addRow("", show_ruler)
+        view_form.addRow("", autosave_enabled)
+        view_form.addRow("备份间隔(分钟):", autosave_interval)
+        view_group.setLayout(view_form)
+        dialog_layout.addWidget(view_group)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        dialog_layout.addWidget(button_box)
+
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        new_settings = {
+            "theme": self.current_theme,
+            "canvas_preset": canvas_preset.currentText(),
+            "canvas_width": self._get_value_from_combo(canvas_width.currentText()),
+            "canvas_height": self._get_value_from_combo(canvas_height.currentText()),
+            "margin": self._get_value_from_combo(margin.currentText()),
+            "spacing": self._get_value_from_combo(spacing.currentText()),
+            "grid_size": self._get_value_from_combo(grid_size.currentText()),
+            "dpi": int(dpi.currentText()),
+            "export_format": export_format.currentText(),
+            "auto_crop": auto_crop.isChecked(),
+            "label_fontsize": int(label_fontsize.currentText()),
+            "label_visible": label_visible.isChecked(),
+            "label_bold": label_bold.isChecked(),
+            "label_color": label_color.currentText(),
+            "label_offset": float(label_offset.currentText().replace("mm", "").strip()),
+            "snap_enabled": snap_enabled.isChecked(),
+            "show_guides": show_guides.isChecked(),
+            "show_ruler": show_ruler.isChecked(),
+            "autosave_enabled": autosave_enabled.isChecked(),
+            "autosave_interval_minutes": autosave_interval.value(),
+        }
+        self.user_settings = save_settings(new_settings)
+        self._apply_saved_settings_to_controls()
+        self._restart_auto_backup_from_settings()
+        self.statusBar().showMessage("V19 设置已保存", 5000)
+
     def _get_value_from_combo(self, combo_text):
         """Extract numeric value from combo box text like '10mm' -> 10."""
         return int(combo_text.replace('mm', '').strip())
@@ -1772,6 +2002,18 @@ class FigureCombinerGUI(QMainWindow):
     def get_canvas_height(self):
         """Get canvas height value from combo box."""
         return self._get_value_from_combo(self.canvas_height_combo.currentText())
+
+    def get_active_canvas_width(self):
+        """Get the real width of the current tab's canvas."""
+        if self.current_canvas is not None:
+            return self.current_canvas.canvas_width
+        return self.get_canvas_width()
+
+    def get_active_canvas_height(self):
+        """Get the real height of the current tab's canvas."""
+        if self.current_canvas is not None:
+            return self.current_canvas.canvas_height
+        return self.get_canvas_height()
 
     def get_margin(self):
         """Get margin value from combo box."""
@@ -2378,15 +2620,17 @@ class FigureCombinerGUI(QMainWindow):
         self.capture_history_state(f"已调整图片间距为 {spacing}mm")
         self.statusBar().showMessage(f"已将 {len(selected_items)} 个图片{direction}间距调整为 {spacing}mm")
 
-    def import_dropped_pdfs(self, pdf_paths, drop_pos=None):
+    def import_dropped_pdfs(self, pdf_paths, drop_pos=None, original_paths=None):
         """Import PDF files dropped onto the canvas - V8 NEW.
 
         Args:
             pdf_paths: List of PDF file paths
             drop_pos: V19 - 拖放落点 (x_mm, y_mm)，图的中心落在此处；None 则居中
+            original_paths: 可选映射，临时 PDF 路径 -> 用户最早导入的真实路径
         """
         try:
             imported_count = 0
+            original_paths = original_paths or {}
 
             for pdf_path in pdf_paths:
                 if not os.path.exists(pdf_path):
@@ -2404,7 +2648,8 @@ class FigureCombinerGUI(QMainWindow):
                 height = rect.height
                 aspect_ratio = width / height if height > 0 else 1.0
 
-                filename = os.path.basename(pdf_path)
+                original_path = original_paths.get(pdf_path, pdf_path)
+                filename = os.path.basename(original_path)
 
                 # Create PDF info
                 from pdf_utils import parse_filename
@@ -2416,7 +2661,8 @@ class FigureCombinerGUI(QMainWindow):
                     width=width,
                     height=height,
                     aspect_ratio=aspect_ratio,
-                    sort_key=sort_key
+                    sort_key=sort_key,
+                    original_path=original_path,
                 )
 
                 # Add to pdf_files list
@@ -2492,6 +2738,7 @@ class FigureCombinerGUI(QMainWindow):
         try:
             pdf_files = []
             temp_pdfs = []  # Track temporary PDFs for cleanup
+            original_paths = {}
 
             for filepath in file_paths:
                 if not os.path.exists(filepath):
@@ -2501,15 +2748,17 @@ class FigureCombinerGUI(QMainWindow):
 
                 if ext == '.pdf':
                     pdf_files.append(filepath)
+                    original_paths[filepath] = filepath
                 elif ext in ('.tif', '.tiff', '.png', '.jpg', '.jpeg'):
                     # Convert image to temporary PDF
                     temp_pdf = self._convert_image_to_pdf(filepath)
                     if temp_pdf:
                         pdf_files.append(temp_pdf)
                         temp_pdfs.append(temp_pdf)
+                        original_paths[temp_pdf] = filepath
 
             if pdf_files:
-                self.import_dropped_pdfs(pdf_files, drop_pos=drop_pos)
+                self.import_dropped_pdfs(pdf_files, drop_pos=drop_pos, original_paths=original_paths)
             else:
                 self.statusBar().showMessage("未能导入任何文件")
 
@@ -2788,6 +3037,17 @@ class FigureCombinerGUI(QMainWindow):
             return (0, ord(label) - 65)
         return (1, str(label))
 
+    @staticmethod
+    def _smart_grid_column_presets(count):
+        """Return V19 asymmetric column presets matching selected figure count."""
+        presets = {
+            3: [("左二右一", "2+1"), ("左一右二", "1+2")],
+            4: [("左三右一", "3+1"), ("左一右三", "1+3")],
+            5: [("左三右二", "3+2"), ("左二右三", "2+3")],
+            6: [("左四右二", "4+2"), ("左二右四", "2+4"), ("三列各二", "2+2+2")],
+        }
+        return presets.get(count, [])
+
     def apply_smart_grid_layout(self):
         """V19 智能网格：选中图按 行×列 排列；可选「等高填充」到鼠标画出的宽度。
 
@@ -2806,13 +3066,16 @@ class FigureCombinerGUI(QMainWindow):
         count = len(selected)
 
         from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QRadioButton,
-                                     QDialogButtonBox, QLabel, QButtonGroup, QCheckBox)
+                                     QDialogButtonBox, QLabel, QButtonGroup,
+                                     QCheckBox, QLineEdit)
         dialog = QDialog(self)
         dialog.setWindowTitle("智能网格排列")
         layout = QVBoxLayout()
         layout.addWidget(QLabel(f"已选中 {count} 个图片，请选择排列方式："))
 
         radio_buttons = []
+        custom_radio = None
+        custom_input = None
         if count == 1:
             selected_rows = selected_cols = 1   # 单图无需行列选择
         else:
@@ -2829,9 +3092,44 @@ class FigureCombinerGUI(QMainWindow):
                 radio = QRadioButton(f"{rows} 行 × {cols} 列")
                 if i == 0:
                     radio.setChecked(True)
-                radio_buttons.append((radio, rows, cols))
+                radio_buttons.append({
+                    "radio": radio,
+                    "mode": "grid",
+                    "rows": rows,
+                    "cols": cols,
+                    "pattern": None,
+                })
                 button_group.addButton(radio)
                 layout.addWidget(radio)
+
+            column_presets = self._smart_grid_column_presets(count)
+            if column_presets:
+                layout.addWidget(QLabel("非对称模板："))
+                for title, pattern in column_presets:
+                    radio = QRadioButton(f"{title}（{pattern}）")
+                    radio_buttons.append({
+                        "radio": radio,
+                        "mode": "columns",
+                        "rows": None,
+                        "cols": None,
+                        "pattern": pattern,
+                    })
+                    button_group.addButton(radio)
+                    layout.addWidget(radio)
+
+            custom_radio = QRadioButton("自定义列模板")
+            custom_input = QLineEdit()
+            custom_input.setPlaceholderText("例如 2+1、3+1、1+2、2+2+2")
+            radio_buttons.append({
+                "radio": custom_radio,
+                "mode": "columns",
+                "rows": None,
+                "cols": None,
+                "pattern": "custom",
+            })
+            button_group.addButton(custom_radio)
+            layout.addWidget(custom_radio)
+            layout.addWidget(custom_input)
 
         chk_fill = QCheckBox("等高填充宽度（点 OK 后用鼠标拖一条横线指定宽度；单击=整幅画布宽度）")
         chk_fill.setChecked(True)
@@ -2847,17 +3145,37 @@ class FigureCombinerGUI(QMainWindow):
             return
 
         if count > 1:
-            selected_rows = selected_cols = None
-            for radio, rows, cols in radio_buttons:
-                if radio.isChecked():
-                    selected_rows, selected_cols = rows, cols
+            selected_rows = selected_cols = selected_pattern = selected_mode = None
+            for option in radio_buttons:
+                if option["radio"].isChecked():
+                    selected_mode = option["mode"]
+                    selected_rows = option["rows"]
+                    selected_cols = option["cols"]
+                    selected_pattern = option["pattern"]
                     break
-            if selected_rows is None:
+            if selected_mode is None:
                 return
+            if selected_pattern == "custom":
+                selected_pattern = custom_input.text().strip()
+            if selected_mode == "columns":
+                try:
+                    selected_column_counts = LayoutEngine.parse_column_pattern(selected_pattern, count)
+                except ValueError as e:
+                    QMessageBox.warning(self, "模板错误", str(e))
+                    return
+            else:
+                selected_column_counts = None
+        else:
+            selected_mode = "grid"
+            selected_pattern = None
+            selected_column_counts = None
 
         do_fill = chk_fill.isChecked()
 
         if not do_fill:
+            if selected_column_counts:
+                QMessageBox.information(self, "提示", "非对称模板需要勾选“等高填充宽度”。")
+                return
             # V18 原版行为：仅按行列摆放，不缩放
             self.arrange_items_in_grid(selected, selected_rows, selected_cols)
             return
@@ -2868,6 +3186,9 @@ class FigureCombinerGUI(QMainWindow):
             'rows': selected_rows,
             'cols': selected_cols,
             'count': count,
+            'mode': selected_mode,
+            'pattern': selected_pattern,
+            'column_counts': selected_column_counts,
         }
         self.view.start_fill_line(self._on_fill_line_drawn)
         self.statusBar().showMessage(
@@ -2904,6 +3225,8 @@ class FigureCombinerGUI(QMainWindow):
 
         items = pending['items']
         rows, cols, count = pending['rows'], pending['cols'], pending['count']
+        column_counts = pending.get('column_counts')
+        pattern = pending.get('pattern')
         margin = self.get_margin()
         gap = self.get_spacing()
 
@@ -2911,7 +3234,7 @@ class FigureCombinerGUI(QMainWindow):
         drawn_w = x_right - x_left
         if drawn_w < 10.0:
             span_left = margin
-            span_width = self.get_canvas_width() - 2 * margin
+            span_width = self.get_active_canvas_width() - 2 * margin
             top_y = max(margin, y)
         else:
             span_left = x_left
@@ -2919,30 +3242,49 @@ class FigureCombinerGUI(QMainWindow):
             top_y = y
 
         engine = LayoutEngine(
-            self.get_canvas_width(), self.get_canvas_height(), margin, gap)
+            self.get_active_canvas_width(), self.get_active_canvas_height(), margin, gap)
 
-        cur_y = top_y
-        for r in range(rows):
-            row_items = items[r * cols:(r + 1) * cols]
-            if not row_items:
-                break
-            sizes = [(it.layout_item.width, it.layout_item.height) for it in row_items]
-            new_sizes = engine.justified_row(sizes, span_width, gap)
-            x = span_left
-            row_h = 0.0
-            for it, (w, h) in zip(row_items, new_sizes):
+        if column_counts:
+            source_items = [it.layout_item for it in items]
+            new_layouts = engine.asymmetric_columns(
+                source_items,
+                column_counts,
+                span_left=span_left,
+                top_y=top_y,
+                span_width=span_width,
+                gap=gap,
+            )
+            for it, new_layout in zip(items, new_layouts):
                 li = it.layout_item
-                li.x, li.y, li.width, li.height = x, cur_y, w, h
+                li.x = new_layout.x
+                li.y = new_layout.y
+                li.width = new_layout.width
+                li.height = new_layout.height
                 it.update_from_layout_item()
-                x += w + gap
-                row_h = max(row_h, h)
-            cur_y += row_h + gap
+        else:
+            cur_y = top_y
+            for r in range(rows):
+                row_items = items[r * cols:(r + 1) * cols]
+                if not row_items:
+                    break
+                sizes = [(it.layout_item.width, it.layout_item.height) for it in row_items]
+                new_sizes = engine.justified_row(sizes, span_width, gap)
+                x = span_left
+                row_h = 0.0
+                for it, (w, h) in zip(row_items, new_sizes):
+                    li = it.layout_item
+                    li.x, li.y, li.width, li.height = x, cur_y, w, h
+                    it.update_from_layout_item()
+                    x += w + gap
+                    row_h = max(row_h, h)
+                cur_y += row_h + gap
 
         self._sync_to_canvas()
-        self.capture_history_state(f"智能网格等高填充 {rows}×{cols}（{count} 张）")
+        layout_name = f"列模板 {pattern}" if column_counts else f"{rows}×{cols}"
+        self.capture_history_state(f"智能网格等高填充 {layout_name}（{count} 张）")
         self.update_utilization(engine)
         self.statusBar().showMessage(
-            f"✓ 已把 {count} 张图等高填充到宽度 {span_width:.0f} mm", 5000)
+            f"✓ 已按 {layout_name} 把 {count} 张图填充到宽度 {span_width:.0f} mm", 5000)
 
     def update_utilization(self, engine):
         """Update space utilization label."""
@@ -3587,12 +3929,17 @@ class FigureCombinerGUI(QMainWindow):
             md_lines.append("")
 
             for state in current_states:
-                # Get original filename from pdf_info
-                original_filename = state.pdf_info.filename
-                # Get current label (at export time)
+                pdf_info = state.pdf_info
+                original_filename = pdf_info.filename
+                original_path = getattr(pdf_info, "original_path", None)
+                path_label = "原始路径"
+                if not original_path:
+                    original_path = pdf_info.filepath
+                    path_label = "当前路径"
                 label = state.label
-                # Format as markdown list item
-                md_lines.append(f"- **{canvas_name}{label}**: `{original_filename}`")
+                md_lines.append(f"- **{canvas_name}{label}**")
+                md_lines.append(f"  - 文件名: `{original_filename}`")
+                md_lines.append(f"  - {path_label}: `{original_path}`")
 
             # Save as markdown file
             md_path = f"{base_path}_info.md"
@@ -3716,7 +4063,7 @@ class FigureCombinerGUI(QMainWindow):
             raise Exception("画布为空，无法保存")
 
         project_data = {
-            "version": "17.0",
+            "version": "19.0",
             "canvas_name": canvas.canvas_name,
             "canvas_width": canvas.canvas_width,
             "canvas_height": canvas.canvas_height,
@@ -3739,6 +4086,7 @@ class FigureCombinerGUI(QMainWindow):
         for layout in current_states:
             project_data["layouts"].append({
                 "pdf_path": layout.pdf_info.filepath,
+                "original_path": getattr(layout.pdf_info, "original_path", None) or layout.pdf_info.filepath,
                 "x": layout.x,
                 "y": layout.y,
                 "width": layout.width,
@@ -3991,6 +4339,7 @@ class FigureCombinerGUI(QMainWindow):
                 height=height,
                 aspect_ratio=aspect_ratio,
                 sort_key=sort_key,
+                original_path=layout_data.get("original_path") or pdf_path,
             )
             if not pdf_exists:
                 pdf_info.is_missing = True

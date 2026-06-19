@@ -74,12 +74,16 @@ def main():
     window.setWindowTitle(f"学术组图工具 V19.0 FigBox - {theme_name}")
     window.show()
 
-    backup_manager = AutoBackupManager(window, interval_minutes=5)
-    backup_manager.start()
+    backup_manager = None
+    if window.user_settings.get("autosave_enabled", True):
+        interval = int(window.user_settings.get("autosave_interval_minutes", 5))
+        backup_manager = AutoBackupManager(window, interval_minutes=interval)
+        backup_manager.start()
     window._backup_manager = backup_manager
 
     try:
-        backup_manager.offer_recovery_if_any()
+        if backup_manager:
+            backup_manager.offer_recovery_if_any()
     except Exception:
         logger.exception("Autosave recovery prompt failed")
 
