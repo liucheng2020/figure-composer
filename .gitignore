@@ -26,7 +26,6 @@
 /verify_fix.py
 
 # Root-level files that now live under versioned folders.
-/README.md
 /V18更新说明.md
 /auto_backup.py
 /build_exe_v18.py
@@ -63,6 +62,10 @@ build/
 dist/
 **/build/
 **/dist/
+**/build_*/
+**/release_*/
+**/validation_*/
+*.exe
 *.spec
 *.toc
 
